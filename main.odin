@@ -178,8 +178,9 @@ decode_add :: proc(src: []u8, dst: []u8, key: u8) {
 ALPHABET64 :: " etaoinshrdlucmfwypvbgkjqxzETAOINSHRDLUCMFWYPVBGKJQXZ,.!?'-01234"
 
 decode_alphabet64 :: proc(src: []u8, dst: []u8) {
+	alphabet := ALPHABET64
 	for b, i in src {
-		dst[i] = ALPHABET64[int(b & 63)]
+		dst[i] = alphabet[int(b & 63)]
 	}
 }
 
