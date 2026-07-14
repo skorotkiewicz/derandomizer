@@ -56,14 +56,14 @@ lookup_scorer :: proc(registry: ^Scorer_Registry, name: string) -> (Scorer, bool
 
 parse_scorer_set :: proc(
 	registry: ^Scorer_Registry,
-	spec: string,
+	raw_spec: string,
 ) -> (
 	Scorer_Set,
 	Scorer_Spec_Error,
 	string,
 ) {
 	result: Scorer_Set
-	spec := strings.trim_space(spec)
+	spec := strings.trim_space(raw_spec)
 	if len(spec) == 0 {
 		return result, .Empty_Spec, spec
 	}
