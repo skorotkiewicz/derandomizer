@@ -129,6 +129,7 @@ run_search :: proc(
 	defer os.close(entropy)
 
 	parallel_scanner: Parallel_Scanner
+	parallel_initialized := false
 	if thread_count > 1 {
 		scorer_error, scorer_detail := parallel_scanner_init(
 			&parallel_scanner,
@@ -139,7 +140,10 @@ run_search :: proc(
 			print_scorer_spec_error(scorer_error, scorer_detail)
 			return
 		}
-		defer parallel_scanner_destroy(&parallel_scanner)
+		parallel_initialized = true
+	}
+	defer if parallel_initialized {
+		parallel_scanner_destroy(&parallel_scanner)
 	}
 
 	fmt.println("DERANDOMIZER")
