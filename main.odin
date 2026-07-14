@@ -115,7 +115,12 @@ print_active_scorers :: proc(scorers: ^Scorer_Set) {
 	fmt.println()
 }
 
-run_search :: proc(scorers: ^Scorer_Set) {
+run_search :: proc(
+	scorers: ^Scorer_Set,
+	scorer_spec: string,
+	thread_count: int,
+	automatic_threads: bool,
+) {
 	entropy, err := os.open("/dev/urandom")
 	if err != os.ERROR_NONE {
 		fmt.printf("derandomizer: cannot open /dev/urandom: %v\n", err)
@@ -123,55 +128,66 @@ run_search :: proc(scorers: ^Scorer_Set) {
 	}
 	defer os.close(entropy)
 
+	parallel_scanner: Parallel_Scanner
+	if thread_count > 1 {
+		scorer_error, scorer_detail := parallel_scanner_init(
+			&parallel_scanner,
+			scorer_spec,
+			thread_count,
+		)
+		if scorer_error != .None {
+			print_scorer_spec_error(scorer_error, scorer_detail)
+			return
+		}
+		defer parallel_scanner_destroy(&parallel_scanner)
+	}
+
 	fmt.println("DERANDOMIZER")
 	fmt.println("mining /dev/urandom for suspiciously meaningful accidents")
 	fmt.println("Ctrl-C stops the universe search")
 	print_active_scorers(scorers)
+	if automatic_threads {
+		fmt.printf("threads: %d (auto)\n", thread_count)
+	} else {
+		fmt.printf("threads: %d\n", thread_count)
+	}
 
 	best := Candidate {
 		score = -1.0e300,
 	}
-	block: [BLOCK_SIZE]u8
-	decoded: [WINDOW]u8
+	block: [BLOCK_SIZE + WINDOW - STRIDE]u8
+	records := make([dynamic]Candidate, 0, 32)
+	defer delete(records)
+	carry_length := 0
+	base_offset: u64 = 0
 	total: u64 = 0
 
 	for {
-		n, read_err := os.read_full(entropy, block[:])
-		if read_err != os.ERROR_NONE || n != len(block) {
+		read_buffer := block[carry_length:carry_length + BLOCK_SIZE]
+		n, read_err := os.read_full(entropy, read_buffer)
+		if read_err != os.ERROR_NONE || n != len(read_buffer) {
 			fmt.printf("derandomizer: entropy read failed after %d bytes: %v\n", total, read_err)
 			return
 		}
 
-		for start := 0; start + WINDOW <= len(block); start += STRIDE {
-			src := block[start:start + WINDOW]
-			offset := total + u64(start)
-
-			decode_raw(src, decoded[:])
-			if consider(&best, scorers, decoded[:], offset, .Raw, 0) {
-				print_candidate(&best)
-			}
-
-			for key := 1; key < 256; key += 1 {
-				k := u8(key)
-
-				decode_xor(src, decoded[:], k)
-				if consider(&best, scorers, decoded[:], offset, .Xor, k) {
-					print_candidate(&best)
-				}
-
-				decode_add(src, decoded[:], k)
-				if consider(&best, scorers, decoded[:], offset, .Add, k) {
-					print_candidate(&best)
-				}
-			}
-
-			decode_alphabet64(src, decoded[:])
-			if consider(&best, scorers, decoded[:], offset, .Alphabet64, 0) {
-				print_candidate(&best)
-			}
+		data_length := carry_length + n
+		data := block[:data_length]
+		clear(&records)
+		if thread_count > 1 {
+			best = parallel_scan_chunk(&parallel_scanner, data, base_offset, best, &records)
+		} else {
+			best = scan_chunk(scorers, data, base_offset, best, &records)
+		}
+		for &candidate in records {
+			print_candidate(&candidate)
 		}
 
 		total += u64(n)
+		next_start := scan_window_count(data) * STRIDE
+		carry_length = data_length - next_start
+		copy(block[:carry_length], block[next_start:data_length])
+		base_offset += u64(next_start)
+
 		if total % (1024 * 1024) == 0 {
 			fmt.printf("\rsearched %d MiB | best score %.2f", total / (1024 * 1024), best.score)
 		}
@@ -202,5 +218,6 @@ main :: proc() {
 		print_scorer_spec_error(scorer_error, scorer_detail)
 		os.exit(2)
 	}
-	run_search(&scorers)
+	thread_count := resolve_thread_count(options.threads)
+	run_search(&scorers, options.scorer_spec, thread_count, options.threads == 0)
 }

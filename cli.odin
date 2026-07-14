@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:strconv"
 import "core:strings"
 
 Run_Mode :: enum {
@@ -12,6 +13,7 @@ Run_Mode :: enum {
 Options :: struct {
 	mode:        Run_Mode,
 	scorer_spec: string,
+	threads:     int,
 }
 
 Options_Error :: enum {
@@ -19,6 +21,9 @@ Options_Error :: enum {
 	Unknown_Argument,
 	Missing_Scorer_Spec,
 	Duplicate_Scorer_Option,
+	Missing_Thread_Count,
+	Duplicate_Threads_Option,
+	Invalid_Thread_Count,
 }
 
 parse_options :: proc(args: []string) -> (Options, Options_Error, string) {
@@ -27,6 +32,7 @@ parse_options :: proc(args: []string) -> (Options, Options_Error, string) {
 		scorer_spec = "language",
 	}
 	scorer_seen := false
+	threads_seen := false
 
 	for index := 0; index < len(args); index += 1 {
 		argument := args[index]
@@ -51,6 +57,31 @@ parse_options :: proc(args: []string) -> (Options, Options_Error, string) {
 			}
 			options.scorer_spec = argument[len("--scorer="):]
 			scorer_seen = true
+		case argument == "--threads":
+			if threads_seen {
+				return options, .Duplicate_Threads_Option, argument
+			}
+			if index + 1 >= len(args) {
+				return options, .Missing_Thread_Count, argument
+			}
+			index += 1
+			thread_count, ok := strconv.parse_int(args[index])
+			if !ok || thread_count < 0 || thread_count > MAX_THREADS {
+				return options, .Invalid_Thread_Count, args[index]
+			}
+			options.threads = thread_count
+			threads_seen = true
+		case strings.has_prefix(argument, "--threads="):
+			if threads_seen {
+				return options, .Duplicate_Threads_Option, argument
+			}
+			value := argument[len("--threads="):]
+			thread_count, ok := strconv.parse_int(value)
+			if !ok || thread_count < 0 || thread_count > MAX_THREADS {
+				return options, .Invalid_Thread_Count, value
+			}
+			options.threads = thread_count
+			threads_seen = true
 		case:
 			return options, .Unknown_Argument, argument
 		}
@@ -60,9 +91,12 @@ parse_options :: proc(args: []string) -> (Options, Options_Error, string) {
 }
 
 print_usage :: proc(program: string) {
-	fmt.printf("usage: %s [--scorer SPEC]\n", program)
-	fmt.println("       --scorer language=1,compression=2")
-	fmt.println("       --self-test")
+	fmt.printf("usage: %s [--scorer SPEC] [--threads N]\n", program)
+	fmt.printf("       %s --self-test\n", program)
+	fmt.println()
+	fmt.println("options:")
+	fmt.println("  --scorer SPEC  language=1,compression=2")
+	fmt.printf("  --threads N    worker threads; 0 = auto, maximum %d (default: 0)\n", MAX_THREADS)
 	fmt.println()
 	fmt.println("scorers:")
 	fmt.println("  language     English-like text heuristic (default)")
@@ -77,6 +111,16 @@ print_options_error :: proc(kind: Options_Error, detail: string) {
 		fmt.eprintf("derandomizer: %s requires a scorer specification\n", detail)
 	case .Duplicate_Scorer_Option:
 		fmt.eprintln("derandomizer: --scorer may only be provided once")
+	case .Missing_Thread_Count:
+		fmt.eprintf("derandomizer: %s requires a thread count\n", detail)
+	case .Duplicate_Threads_Option:
+		fmt.eprintln("derandomizer: --threads may only be provided once")
+	case .Invalid_Thread_Count:
+		fmt.eprintf(
+			"derandomizer: invalid thread count %q; expected an integer from 0 to %d\n",
+			detail,
+			MAX_THREADS,
+		)
 	case .None:
 	}
 }
