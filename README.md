@@ -45,6 +45,20 @@ just run --scorer compression
 just run --scorer language=1,compression=0.25
 ```
 
+Scanning uses all detected logical CPU threads by default. Set an explicit
+worker count when benchmarking or reproducing a run:
+
+```sh
+just run --threads 4
+just run --threads 1 # deterministic sequential baseline
+```
+
+`--threads 0` also selects automatic CPU detection. Work is split into coarse,
+contiguous window ranges rather than one task per candidate. Every task owns its
+scorer state, and the coordinator merges task-local records in input order, so
+parallel and sequential scans produce the same record sequence for the same
+bytes. A 40-byte carry preserves windows that cross read boundaries.
+
 `compression` is an allocation-free LZSS bit-cost estimator. Its score is the
 estimated number of bits saved relative to the candidate's raw bytes; random
 literal-only data therefore receives a small negative score. `language` retains
@@ -61,9 +75,11 @@ Score_Proc :: #type proc(state: rawptr, data: []u8) -> f64
 
 Add its state to `Scorer_Registry`, register its name in `lookup_scorer`, and the
 CLI parser and weighted composition will handle it without changes to the scan
-or decoder loops. Scorers run in the hot loop, so they should avoid allocation.
-Expensive tokenizer, local-LM, executable, image, and music scorers will need a
-cheap prefilter or staged scoring pipeline before being added.
+or decoder loops. Each parallel scan task gets a separate registry, so mutable
+scratch state is safe but large read-only models should eventually be shared.
+Scorers run in the hot loop, so they should avoid allocation. Expensive
+tokenizer, local-LM, executable, image, and music scorers will need a cheap
+prefilter or staged scoring pipeline before being added.
 
 Run the finite built-in checks with:
 
