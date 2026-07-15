@@ -43,7 +43,15 @@ combine scorers with positive weights:
 ```sh
 just run --scorer compression
 just run --scorer language=1,compression=0.25
+just run --scorer language=1,compression=0.25 --explain
 ```
+
+`--explain` adds a scorer-owned breakdown beneath every new all-time best. It
+shows each raw score, weight, weighted contribution, and the decoder cost.
+`language` reports byte/shape/fragment evidence; `compression` reports raw and
+encoded bit estimates plus the matches it found. Explanations are recomputed
+only for candidates that are printed, so enabling them does not add work to the
+hot scan loop.
 
 Scanning uses all detected logical CPU threads by default. Set an explicit
 worker count when benchmarking or reproducing a run:
@@ -67,19 +75,32 @@ the calibration between those two units.
 
 ## Adding a scorer
 
-A scorer is a name, a state pointer, and a procedure with this shape:
+A scorer is a name, a state pointer, a score procedure, and an optional
+explanation procedure. The hot-path score has this shape:
 
 ```odin
 Score_Proc :: #type proc(state: rawptr, data: []u8) -> f64
 ```
 
-Add its state to `Scorer_Registry`, register its name in `lookup_scorer`, and the
-CLI parser and weighted composition will handle it without changes to the scan
-or decoder loops. Each parallel scan task gets a separate registry, so mutable
-scratch state is safe but large read-only models should eventually be shared.
-Scorers run in the hot loop, so they should avoid allocation. Expensive
-tokenizer, local-LM, executable, image, and music scorers will need a cheap
-prefilter or staged scoring pipeline before being added.
+An explainer writes human-readable evidence and returns the same raw score:
+
+```odin
+Explain_Proc :: #type proc(
+    state: rawptr,
+    data: []u8,
+    weight: f64,
+    writer: io.Writer,
+) -> f64
+```
+
+Add scorer state to `Scorer_Registry`, register the procedures in
+`lookup_scorer`, and the CLI parser and weighted composition will handle it
+without changes to the scan or decoder loops. Each parallel scan task gets a
+separate registry, so mutable scratch state is safe but large read-only models
+should eventually be shared. Scorers run in the hot loop, so they should avoid
+allocation. Explainers run only when a record is printed. Expensive tokenizer,
+local-LM, executable, image, and music scorers will need a cheap prefilter or
+staged scoring pipeline before being added.
 
 Run the finite built-in checks with:
 

@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:strings"
 
 self_test_expect :: proc(failures: ^int, condition: bool, description: string) {
 	if condition {
@@ -83,8 +84,9 @@ run_self_tests :: proc() -> bool {
 	self_test_expect(&failures, options.mode == .Search, "default mode is search")
 	self_test_expect(&failures, options.scorer_spec == "language", "default scorer is language")
 	self_test_expect(&failures, options.threads == 0, "default thread count is automatic")
+	self_test_expect(&failures, !options.explain, "score explanations are disabled by default")
 
-	option_args := [?]string{"--scorer", "language=2,compression=0.5", "--threads=4"}
+	option_args := [?]string{"--scorer", "language=2,compression=0.5", "--threads=4", "--explain"}
 	options, options_error, _ = parse_options(option_args[:])
 	self_test_expect(&failures, options_error == .None, "explicit scorer option parses")
 	self_test_expect(
@@ -93,6 +95,7 @@ run_self_tests :: proc() -> bool {
 		"scorer option keeps its specification",
 	)
 	self_test_expect(&failures, options.threads == 4, "thread count option parses")
+	self_test_expect(&failures, options.explain, "explain option parses")
 
 	duplicate_args := [?]string{"--scorer=language", "--scorer", "compression"}
 	_, options_error, _ = parse_options(duplicate_args[:])
@@ -150,6 +153,16 @@ run_self_tests :: proc() -> bool {
 		language_score(english) > language_score(binary[:]),
 		"language scorer prefers an English fixture",
 	)
+	language_analysis := language_analyze(english)
+	self_test_expect(
+		&failures,
+		language_analysis.score ==
+		language_analysis.byte_points +
+			language_analysis.shape_points +
+			language_analysis.fragment_points +
+			language_analysis.repetition_points,
+		"language explanation components sum to its score",
+	)
 
 	repeated := transmute([]u8)string("abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc")
 	incompressible: [48]u8
@@ -158,6 +171,7 @@ run_self_tests :: proc() -> bool {
 	}
 	compression, found := lookup_scorer(&registry, "compression")
 	self_test_expect(&failures, found, "compression scorer is registered")
+	self_test_expect(&failures, compression.explain != nil, "compression scorer has an explainer")
 	repeated_score := score_with(compression, repeated)
 	self_test_expect(
 		&failures,
@@ -169,12 +183,67 @@ run_self_tests :: proc() -> bool {
 		repeated_score == score_with(compression, repeated),
 		"compression scorer is stable across calls",
 	)
+	compression_trace: Compression_Trace
+	compression_analysis := compression_analyze(compression.state, repeated, &compression_trace)
+	self_test_expect(
+		&failures,
+		compression_analysis.raw_bits - compression_analysis.encoded_bits == int(repeated_score),
+		"compression explanation arithmetic matches its score",
+	)
+	self_test_expect(
+		&failures,
+		compression_trace.count > 0 && compression_analysis.match_count > 0,
+		"compression explanation records repeated matches",
+	)
 
 	combined := score_with_set(&scorers, english)
 	expected :=
 		scorers.items[0].weight * score_with(scorers.items[0].scorer, english) +
 		scorers.items[1].weight * score_with(scorers.items[1].scorer, english)
 	self_test_expect(&failures, combined == expected, "weighted scorer values are summed")
+	explanation_buffer: [16 * 1024]u8
+	explanation_builder := strings.builder_from_bytes(explanation_buffer[:])
+	expected_explained_score := score_with_set(&scorers, english) - decoder_cost(.Alphabet64)
+	explained_score := explain_score_with_set(
+		&scorers,
+		english,
+		.Alphabet64,
+		strings.to_writer(&explanation_builder),
+	)
+	explanation := strings.to_string(explanation_builder)
+	self_test_expect(
+		&failures,
+		explained_score == expected_explained_score,
+		"explained total matches normal weighted scoring and decoder cost",
+	)
+	self_test_expect(
+		&failures,
+		strings.contains(explanation, "  language: raw=") &&
+		strings.contains(explanation, "  compression: raw=") &&
+		strings.contains(explanation, "    matches:") &&
+		strings.contains(explanation, "  decoder: Alphabet64 cost=55.00") &&
+		strings.contains(explanation, "  total: "),
+		"explanation includes scorer contributions, decoder cost, and total",
+	)
+	strings.builder_reset(&explanation_builder)
+	compression_only: Scorer_Set
+	compression_only.items[0] = Weighted_Scorer {
+		scorer = compression,
+		weight = 1,
+	}
+	compression_only.count = 1
+	explain_score_with_set(
+		&compression_only,
+		repeated,
+		.Raw,
+		strings.to_writer(&explanation_builder),
+	)
+	compression_explanation := strings.to_string(explanation_builder)
+	self_test_expect(
+		&failures,
+		strings.contains(compression_explanation, "offset 3 <- distance 3 length 45"),
+		"compression explanation includes match offset, distance, and length",
+	)
 
 	language_only, language_error, _ := parse_scorer_set(&registry, "language")
 	self_test_expect(&failures, language_error == .None, "single scorer set parses")

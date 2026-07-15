@@ -14,6 +14,7 @@ Options :: struct {
 	mode:        Run_Mode,
 	scorer_spec: string,
 	threads:     int,
+	explain:     bool,
 }
 
 Options_Error :: enum {
@@ -41,6 +42,8 @@ parse_options :: proc(args: []string) -> (Options, Options_Error, string) {
 			options.mode = .Help
 		case argument == "--self-test":
 			options.mode = .Self_Test
+		case argument == "--explain":
+			options.explain = true
 		case argument == "--scorer":
 			if scorer_seen {
 				return options, .Duplicate_Scorer_Option, argument
@@ -91,12 +94,13 @@ parse_options :: proc(args: []string) -> (Options, Options_Error, string) {
 }
 
 print_usage :: proc(program: string) {
-	fmt.printf("usage: %s [--scorer SPEC] [--threads N]\n", program)
+	fmt.printf("usage: %s [--scorer SPEC] [--threads N] [--explain]\n", program)
 	fmt.printf("       %s --self-test\n", program)
 	fmt.println()
 	fmt.println("options:")
 	fmt.println("  --scorer SPEC  language=1,compression=2")
 	fmt.printf("  --threads N    worker threads; 0 = auto, maximum %d (default: 0)\n", MAX_THREADS)
+	fmt.println("  --explain      show why each new best candidate received its score")
 	fmt.println()
 	fmt.println("scorers:")
 	fmt.println("  language     English-like text heuristic (default)")

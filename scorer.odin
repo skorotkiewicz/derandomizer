@@ -1,14 +1,18 @@
 package main
 
+import "core:fmt"
+import "core:io"
 import "core:math"
 import "core:strconv"
 import "core:strings"
 
 Score_Proc :: #type proc(state: rawptr, data: []u8) -> f64
+Explain_Proc :: #type proc(state: rawptr, data: []u8, weight: f64, writer: io.Writer) -> f64
 
 Scorer :: struct {
 	name:      string,
 	procedure: Score_Proc,
+	explain:   Explain_Proc,
 	state:     rawptr,
 }
 
@@ -42,11 +46,17 @@ Scorer_Spec_Error :: enum {
 lookup_scorer :: proc(registry: ^Scorer_Registry, name: string) -> (Scorer, bool) {
 	switch name {
 	case "language":
-		return Scorer{name = "language", procedure = language_score_proc}, true
+		return Scorer {
+				name = "language",
+				procedure = language_score_proc,
+				explain = language_explain_proc,
+			},
+			true
 	case "compression":
 		return Scorer {
 				name = "compression",
 				procedure = compression_score_proc,
+				explain = compression_explain_proc,
 				state = &registry.compression,
 			},
 			true
@@ -134,5 +144,37 @@ score_with_set :: proc(scorers: ^Scorer_Set, data: []u8) -> f64 {
 	for item in scorers.items[:scorers.count] {
 		total += item.weight * score_with(item.scorer, data)
 	}
+	return total
+}
+
+explain_score_with_set :: proc(
+	scorers: ^Scorer_Set,
+	data: []u8,
+	decoder: Decoder,
+	writer: io.Writer,
+) -> f64 {
+	total := 0.0
+	for item in scorers.items[:scorers.count] {
+		raw_score := 0.0
+		if item.scorer.explain != nil {
+			raw_score = item.scorer.explain(item.scorer.state, data, item.weight, writer)
+		} else {
+			raw_score = score_with(item.scorer, data)
+			fmt.wprintf(
+				writer,
+				"  %s: raw=%+.2f weight=%.2f contribution=%+.2f\n",
+				item.scorer.name,
+				raw_score,
+				item.weight,
+				item.weight * raw_score,
+			)
+		}
+		total += item.weight * raw_score
+	}
+
+	cost := decoder_cost(decoder)
+	fmt.wprintf(writer, "  decoder: %v cost=%.2f\n", decoder, cost)
+	total -= cost
+	fmt.wprintf(writer, "  total: %+.2f\n", total)
 	return total
 }

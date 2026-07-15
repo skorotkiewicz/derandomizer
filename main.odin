@@ -81,7 +81,7 @@ consider :: proc(
 	return true
 }
 
-print_candidate :: proc(c: ^Candidate) {
+print_candidate :: proc(c: ^Candidate, scorers: ^Scorer_Set, show_explanation: bool) {
 	rendered: [WINDOW]u8
 	for b, i in c.bytes {
 		if is_printable(b) {
@@ -102,6 +102,9 @@ print_candidate :: proc(c: ^Candidate) {
 	}
 	fmt.println()
 	fmt.println(string(rendered[:]))
+	if show_explanation {
+		explain_score_with_set(scorers, c.bytes[:], c.decoder, os.to_writer(os.stdout))
+	}
 }
 
 print_active_scorers :: proc(scorers: ^Scorer_Set) {
@@ -120,6 +123,7 @@ run_search :: proc(
 	scorer_spec: string,
 	thread_count: int,
 	automatic_threads: bool,
+	show_explanation: bool,
 ) {
 	entropy, err := os.open("/dev/urandom")
 	if err != os.ERROR_NONE {
@@ -183,7 +187,7 @@ run_search :: proc(
 			best = scan_chunk(scorers, data, base_offset, best, &records)
 		}
 		for &candidate in records {
-			print_candidate(&candidate)
+			print_candidate(&candidate, scorers, show_explanation)
 		}
 
 		total += u64(n)
@@ -223,5 +227,5 @@ main :: proc() {
 		os.exit(2)
 	}
 	thread_count := resolve_thread_count(options.threads)
-	run_search(&scorers, options.scorer_spec, thread_count, options.threads == 0)
+	run_search(&scorers, options.scorer_spec, thread_count, options.threads == 0, options.explain)
 }
