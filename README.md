@@ -73,6 +73,14 @@ literal-only data therefore receives a small negative score. `language` retains
 the original heuristic's arbitrary point scale, so combination weights are also
 the calibration between those two units.
 
+Scorers declare which constant-byte transforms cannot change their underlying
+signal. `compression` declares XOR and modular ADD invariant, so a
+compression-only run evaluates two candidates per window (Raw and
+`Alphabet64`) instead of all 512. `Alphabet64` remains because its lossy mapping
+can genuinely change byte equality. A weighted scorer set keeps a decoder
+family whenever any active scorer needs it, so adding `language` restores the
+full XOR and ADD search.
+
 ## Adding a scorer
 
 A scorer is a name, a state pointer, a score procedure, and an optional
@@ -95,12 +103,14 @@ Explain_Proc :: #type proc(
 
 Add scorer state to `Scorer_Registry`, register the procedures in
 `lookup_scorer`, and the CLI parser and weighted composition will handle it
-without changes to the scan or decoder loops. Each parallel scan task gets a
-separate registry, so mutable scratch state is safe but large read-only models
-should eventually be shared. Scorers run in the hot loop, so they should avoid
-allocation. Explainers run only when a record is printed. Expensive tokenizer,
-local-LM, executable, image, and music scorers will need a cheap prefilter or
-staged scoring pipeline before being added.
+without changes to the scan or decoder loops. Set `Scorer.invariances` only for
+transforms that conceptually preserve the scorer's signal; the scanner uses the
+intersection across active scorers when pruning decoder families. Each parallel
+scan task gets a separate registry, so mutable scratch state is safe but large
+read-only models should eventually be shared. Scorers run in the hot loop, so
+they should avoid allocation. Explainers run only when a record is printed.
+Expensive tokenizer, local-LM, executable, image, and music scorers will need a
+cheap prefilter or staged scoring pipeline before being added.
 
 Run the finite built-in checks with:
 

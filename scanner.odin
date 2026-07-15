@@ -173,6 +173,8 @@ scan_range :: proc(
 ) -> Candidate {
 	best := initial_best
 	decoded: [WINDOW]u8
+	scan_xor := scorer_set_requires_decoder(scorers, .Xor)
+	scan_add := scorer_set_requires_decoder(scorers, .Add)
 
 	for window_index := first_window;
 	    window_index < first_window + window_count;
@@ -186,17 +188,23 @@ scan_range :: proc(
 			append(records, best)
 		}
 
-		for key := 1; key < 256; key += 1 {
-			k := u8(key)
+		if scan_xor || scan_add {
+			for key := 1; key < 256; key += 1 {
+				k := u8(key)
 
-			decode_xor(src, decoded[:], k)
-			if consider(&best, scorers, decoded[:], offset, .Xor, k) {
-				append(records, best)
-			}
+				if scan_xor {
+					decode_xor(src, decoded[:], k)
+					if consider(&best, scorers, decoded[:], offset, .Xor, k) {
+						append(records, best)
+					}
+				}
 
-			decode_add(src, decoded[:], k)
-			if consider(&best, scorers, decoded[:], offset, .Add, k) {
-				append(records, best)
+				if scan_add {
+					decode_add(src, decoded[:], k)
+					if consider(&best, scorers, decoded[:], offset, .Add, k) {
+						append(records, best)
+					}
+				}
 			}
 		}
 

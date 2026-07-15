@@ -9,11 +9,19 @@ import "core:strings"
 Score_Proc :: #type proc(state: rawptr, data: []u8) -> f64
 Explain_Proc :: #type proc(state: rawptr, data: []u8, weight: f64, writer: io.Writer) -> f64
 
+Scorer_Invariance :: enum {
+	Constant_Xor,
+	Constant_Add,
+}
+
+Scorer_Invariances :: bit_set[Scorer_Invariance]
+
 Scorer :: struct {
-	name:      string,
-	procedure: Score_Proc,
-	explain:   Explain_Proc,
-	state:     rawptr,
+	name:        string,
+	procedure:   Score_Proc,
+	explain:     Explain_Proc,
+	state:       rawptr,
+	invariances: Scorer_Invariances,
 }
 
 Weighted_Scorer :: struct {
@@ -58,6 +66,7 @@ lookup_scorer :: proc(registry: ^Scorer_Registry, name: string) -> (Scorer, bool
 				procedure = compression_score_proc,
 				explain = compression_explain_proc,
 				state = &registry.compression,
+				invariances = {.Constant_Xor, .Constant_Add},
 			},
 			true
 	}
@@ -145,6 +154,32 @@ score_with_set :: proc(scorers: ^Scorer_Set, data: []u8) -> f64 {
 		total += item.weight * score_with(item.scorer, data)
 	}
 	return total
+}
+
+scorer_is_invariant_under :: proc(scorer: Scorer, decoder: Decoder) -> bool {
+	switch decoder {
+	case .Raw:
+		return true
+	case .Xor:
+		return .Constant_Xor in scorer.invariances
+	case .Add:
+		return .Constant_Add in scorer.invariances
+	case .Alphabet64:
+		return false
+	}
+	return false
+}
+
+scorer_set_requires_decoder :: proc(scorers: ^Scorer_Set, decoder: Decoder) -> bool {
+	if decoder == .Raw {
+		return true
+	}
+	for item in scorers.items[:scorers.count] {
+		if !scorer_is_invariant_under(item.scorer, decoder) {
+			return true
+		}
+	}
+	return false
 }
 
 explain_score_with_set :: proc(

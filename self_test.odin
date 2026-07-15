@@ -3,6 +3,16 @@ package main
 import "core:fmt"
 import "core:strings"
 
+Counting_Scorer_State :: struct {
+	calls: int,
+}
+
+counting_score_proc :: proc(raw_state: rawptr, data: []u8) -> f64 {
+	state := (^Counting_Scorer_State)(raw_state)
+	state.calls += 1
+	return 0
+}
+
 self_test_expect :: proc(failures: ^int, condition: bool, description: string) {
 	if condition {
 		return
@@ -172,6 +182,16 @@ run_self_tests :: proc() -> bool {
 	compression, found := lookup_scorer(&registry, "compression")
 	self_test_expect(&failures, found, "compression scorer is registered")
 	self_test_expect(&failures, compression.explain != nil, "compression scorer has an explainer")
+	self_test_expect(
+		&failures,
+		.Constant_Xor in compression.invariances && .Constant_Add in compression.invariances,
+		"compression declares constant XOR and ADD invariance",
+	)
+	self_test_expect(
+		&failures,
+		scorer_set_requires_decoder(&scorers, .Xor) && scorer_set_requires_decoder(&scorers, .Add),
+		"a mixed language scorer set retains XOR and ADD decoding",
+	)
 	repeated_score := score_with(compression, repeated)
 	self_test_expect(
 		&failures,
@@ -232,6 +252,18 @@ run_self_tests :: proc() -> bool {
 		weight = 1,
 	}
 	compression_only.count = 1
+	self_test_expect(
+		&failures,
+		!scorer_set_requires_decoder(&compression_only, .Xor) &&
+		!scorer_set_requires_decoder(&compression_only, .Add),
+		"compression-only scoring prunes invariant XOR and ADD decoders",
+	)
+	self_test_expect(
+		&failures,
+		scorer_set_requires_decoder(&compression_only, .Raw) &&
+		scorer_set_requires_decoder(&compression_only, .Alphabet64),
+		"compression-only scoring retains Raw and lossy Alphabet64 decoding",
+	)
 	explain_score_with_set(
 		&compression_only,
 		repeated,
@@ -244,6 +276,53 @@ run_self_tests :: proc() -> bool {
 		strings.contains(compression_explanation, "offset 3 <- distance 3 length 45"),
 		"compression explanation includes match offset, distance, and length",
 	)
+
+	decoder_fixture: [WINDOW]u8
+	for &value, index in decoder_fixture {
+		value = u8(index)
+	}
+	decoder_records := make([dynamic]Candidate, 0, 4)
+	decoder_initial := Candidate {
+		score = -1.0e300,
+	}
+	invariant_counting_state: Counting_Scorer_State
+	invariant_counting_set: Scorer_Set
+	invariant_counting_set.items[0] = Weighted_Scorer {
+		scorer = Scorer {
+			name = "invariant-counting",
+			procedure = counting_score_proc,
+			state = &invariant_counting_state,
+			invariances = {.Constant_Xor, .Constant_Add},
+		},
+		weight = 1,
+	}
+	invariant_counting_set.count = 1
+	scan_chunk(&invariant_counting_set, decoder_fixture[:], 0, decoder_initial, &decoder_records)
+	self_test_expect(
+		&failures,
+		invariant_counting_state.calls == 2,
+		"an XOR/ADD-invariant scorer evaluates Raw and Alphabet64 only",
+	)
+
+	clear(&decoder_records)
+	variant_counting_state: Counting_Scorer_State
+	variant_counting_set: Scorer_Set
+	variant_counting_set.items[0] = Weighted_Scorer {
+		scorer = Scorer {
+			name = "variant-counting",
+			procedure = counting_score_proc,
+			state = &variant_counting_state,
+		},
+		weight = 1,
+	}
+	variant_counting_set.count = 1
+	scan_chunk(&variant_counting_set, decoder_fixture[:], 0, decoder_initial, &decoder_records)
+	self_test_expect(
+		&failures,
+		variant_counting_state.calls == 512,
+		"a transform-sensitive scorer evaluates all 512 decoder candidates",
+	)
+	delete(decoder_records)
 
 	language_only, language_error, _ := parse_scorer_set(&registry, "language")
 	self_test_expect(&failures, language_error == .None, "single scorer set parses")
